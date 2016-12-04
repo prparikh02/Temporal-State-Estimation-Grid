@@ -1,8 +1,15 @@
 # Parth Parikh & William Grant
 # CS520 - Assignment 3 - Programming Component
+from __future__ import division
 import os
 import matplotlib.pyplot as plt
 import numpy as np
+from ast import literal_eval as make_tuple
+
+NORMAL = 0
+HARD_T0_TRAVERSE = 1
+HIGHWAY = 2
+BLOCKED = 3
 
 
 def generate_map(rows, cols, in_file=None, start=None, save_file=False):
@@ -35,7 +42,7 @@ def generate_map(rows, cols, in_file=None, start=None, save_file=False):
     return G
 
 
-def add_hard_to_traverse_cells(G, nc=8, r=10, p=0.50):
+def add_hard_to_traverse_cells(G, nc=10, r=15, p=0.50):
     '''
     G: 2d-array representing map/graph
     nc: number of centroids
@@ -57,7 +64,7 @@ def add_hard_to_traverse_cells(G, nc=8, r=10, p=0.50):
                 if j not in xrange(0, rows):
                     continue
                 if np.random.uniform(0, 1) >= 0.50:
-                    G[i, j] = 1
+                    G[i, j] = HARD_T0_TRAVERSE
 
 
 def add_highways(G, nh=4, min_length=100, seg_length=20):
@@ -72,7 +79,7 @@ def add_highways(G, nh=4, min_length=100, seg_length=20):
 
     def create_highway(G, min_length, seg_length):
         r, c, direction = generate_highway_start_point(G.shape)
-        if G[r, c] == 2:
+        if G[r, c] == HIGHWAY:
             return set()
         highway = set()
         highway.add((r, c))  # add starting point to highway
@@ -81,7 +88,7 @@ def add_highways(G, nh=4, min_length=100, seg_length=20):
         while True:
             for i in xrange(seg_length):
                 r, c = get_next_highway_point(r, c, direction)
-                if G[r, c] == 2 or (r, c) in highway:
+                if G[r, c] == HIGHWAY or (r, c) in highway:
                     return set()
                 if is_boundary_node(G.shape, r, c):
                     if steps >= min_length:
@@ -160,9 +167,9 @@ def add_blocked_cells(G, p=0.20):
     C = np.arange(N)
     while B != 0:
         n = np.random.choice(C)
-        if G.ravel()[n] == 2:
+        if G.ravel()[n] in (HIGHWAY, BLOCKED):
             continue
-        G.ravel()[n] = 3
+        G.ravel()[n] = BLOCKED
         B -= 1
 
 
@@ -175,11 +182,11 @@ def generate_start_point(G):
     while True:
         rs = np.random.randint(rows)
         cs = np.random.randint(cols)
-        if G[rs, cs] != 3:
+        if G[rs, cs] != BLOCKED:
             return (rs, cs)
 
 
-def generate_ground_truth_data(G, sp=None, **kwargs):
+def generate_ground_truth_data(G, **kwargs):
     '''
     G: 2d-array representing map/graph
     TODO: implement *args
@@ -216,14 +223,10 @@ def generate_ground_truth_data(G, sp=None, **kwargs):
         else:
             sr = np.random.choice([sr for sr in readings if sr not in true_sr])
         E[i] = sr
-    
+
     if 'map_num' not in kwargs and 'ground_truth_num' not in kwargs:
-        print(C0)
-        print(C)
-        print(A)
-        print(E)
-        return
-    
+        return (C0, C, A, E)
+
     mn = kwargs['map_num']
     gtn = kwargs['ground_truth_num']
     fname = './maps/map{}_groundtruth{}'.format(mn, gtn)
@@ -237,23 +240,121 @@ def generate_ground_truth_data(G, sp=None, **kwargs):
             f.write(e + '\n')
 
 
-def show_ground_truth_data(fname):
+def filtering(G, GT):
+    '''
+    G: 2d-array representing map/graph
+    GT: (tuple) such that GT=(C0, C, A, E) where
+        C0 is initial location,
+        C is sequence of actual steps,
+        A is sequence of actions,
+        E is sequence of sensor readings
+    '''
+
+    def get_possible_previous_states(r, c, a):
+        '''
+        given current state (r, c) and action a, return set of
+        possible previous states that could have led to current state
+        '''
+        possible_states = [(r, c)]
+        if a == 'U':
+            rp, cp = (r+1, c)
+        elif a == 'D':
+            rp, cp = (r-1, c)
+        elif a == 'R':
+            rp, cp = (r, c-1)
+        else:
+            rp, cp = (r, c+1)
+        
+        if is_occupiable(G, rp, cp):
+            possible_states.append((rp, cp))
+        
+        return possible_states
+
+    rows, cols = G.shape
+    C0, C, A, E = GT
+
+    path_provided = False
+    if C0 and C:
+        path_provided = True
+        # convert coordinates from xy to rc
+        C0 = [to_rc(C0[0], C0[1])]
+        C = [to_rc(c[0], c[1]) for c in C]
+
+    # create heatmap and set initial probabilities
+    H = np.zeros(G.shape)
+    H[G != BLOCKED] = 1/(G.size - (G == BLOCKED).sum())
+
+    H_next = np.zeros(H.shape)
+    for i in xrange(len(A)):
+        a = A[i]
+        e = E[i]
+        for r in xrange(rows):
+            for c in xrange(cols):
+                if G[r, c] == BLOCKED:
+                    H_next[r, c] == 0
+                    continue
+                # get possible previous states
+                possible_prevs = get_possible_previous_states(r, c, a)
+
+                # set transition model and prior belief probabilities
+                if len(possible_prevs) == 1:
+                    # if only one possible previous state, namely the current
+                    #   state, then the transition model reduces to prior prob
+                    rn, cn = action_coords(a, r, c)
+
+                    trans_model = np.array((1.00, 0.00))
+                    priors = np.array((H[r, c], 0.00))
+                else:
+                    rn, cn = action_coords(a, r, c)
+                    trans_model = np.array((1.00, 0.90))
+                    priors = np.array((H[r, c], H[possible_prevs[1]]))
+
+                # we need to do additional checks on the current state. Namely,
+                #   check if the action could have even been successfully
+                #   applied
+                rn, cn = action_coords(a, r, c)
+                if is_occupiable(G, rn, cn):
+                    trans_model[0] = 0.10
+
+                # set observation modle probability
+                if e == sensor_reading(G[r, c]):
+                    obs_model = 0.90  # correct reading
+                else:
+                    obs_model = 0.05  # either one of the two other states
+
+                H_next[r, c] = obs_model*trans_model.dot(priors)
+
+        alpha = 1.0/sum(sum(H_next))
+        H_next = alpha*H_next
+        H = np.copy(H_next)
+
+        '''
+        if i in (np.array([10, 50, 100])-1):
+            if path_provided:
+                show_heatmap(H, C0 + C[:i])
+            else:
+                show_heatmap(H)
+        '''
+
+    return (np.unravel_index(H.argmax(), H.shape), H.max())
+
+def load_ground_truth_data(fname):
     with open(fname, 'r') as f:
         data = f.readlines()
     data = map(lambda s: s.strip(), data)
-    C0 = data[0]
-    C = data[1:101]
+    C0 = make_tuple(data[0])
+    C = [make_tuple(d) for d in data[1:101]]
     A = data[101:201]
-    E = data[201:301]
+    E = data[201:]
     return (C0, C, A, E)
 
 
 def sensor_reading(x):
     '''
-    returns x -> e in ['N', 'H', 'T', 'B']
+    returns x -> e in ['N', 'T', 'H', 'B']
     '''
 
-    E = ['N', 'H', 'T', 'B']
+    E = ['N', 'T', 'H', 'B']
     return E[x]
 
 
@@ -264,7 +365,7 @@ def is_occupiable(G, r, c):
     '''
     rows, cols = G.shape
     if r >= 0 and r < rows and c >= 0 and c < cols:
-        return G[r, c] != 3
+        return G[r, c] != BLOCKED
     return False
 
 
@@ -298,13 +399,15 @@ def to_rc(x, y):
     '''
     return (y, x)
 
+
 def load_map_from_file(fname):
     return np.loadtxt(fname, delimiter=',', dtype=int)
 
 
-def show_map(G, *args):
+def show_map(G, S=None, *args):
     '''
     G: 2d-array representing map/graph
+    S: ground truth sequence of moves
     TODO: implement *args
     '''
 
@@ -315,20 +418,33 @@ def show_map(G, *args):
     # plt.colorbar()
     plt.gca().invert_yaxis()
     plt.gca().xaxis.set_ticks_position('top')
+    if S:
+        x = np.array([s[0] for s in S]) + 0.50
+        y = np.array([s[1] for s in S]) + 0.50
+        plt.plot(x, y)
+        plt.plot(x[0], y[0], marker='o')
+        plt.plot(x[-1], y[-1], marker='H')
     plt.show()
 
 
-def show_heatmap(H, *args):
+def show_heatmap(H, S=None, *args):
     '''
     H: 2d-array representing probability heatmap
+    S: ground truth sequence of moves
     TODO: implement *args
     '''
 
-    rows, cols = G.shape
-    cmap = 'reds'
+    rows, cols = H.shape
+    cmap = 'Reds'
     R, C = np.meshgrid(np.arange(rows+1), np.arange(cols+1))
-    plt.colormesh(R, C, H, cmap=cmap)
+    plt.pcolormesh(R, C, H, cmap=cmap)
     plt.colorbar()
     plt.gca().invert_yaxis()
     plt.gca().xaxis.set_ticks_position('top')
+    if S:
+        x = np.array([s[0] for s in S]) + 0.50
+        y = np.array([s[1] for s in S]) + 0.50
+        plt.plot(x, y)
+        plt.plot(x[0], y[0], marker='o')
+        plt.plot(x[-1], y[-1], marker='H')
     plt.show()
