@@ -10,6 +10,8 @@ NORMAL = 0
 HARD_T0_TRAVERSE = 1
 HIGHWAY = 2
 BLOCKED = 3
+TRANSITION_SUCCESS = 0.90
+OBSERVATION_TRUE = 0.90
 
 
 def generate_map(rows, cols, in_file=None, start=None, save_file=False):
@@ -203,20 +205,20 @@ def generate_ground_truth_data(G, **kwargs):
     # generate N random actions
     A = [np.random.choice(actions) for i in xrange(N)]
     # sequence of coordinates
-    C0 = to_xy(r, c)
+    C0 = (r, c)
     C = [(-1, -1) for i in xrange(N)]
     # sequence of sensor readings
     E = ['' for i in xrange(N)]
 
     # set transition and observational model probabilities
-    tm = 0.90
-    om = 0.90
+    tm = TRANSITION_SUCCESS
+    om = OBSERVATION_TRUE
     for i in xrange(N):
         if np.random.uniform() < tm:
             rp, cp = action_coords(A[i], r, c)  # potential new location
             if is_occupiable(G, rp, cp):
                 r, c = rp, cp
-        C[i] = to_xy(r, c)
+        C[i] = (r, c)
         true_sr = sensor_reading(G[C[i]])  # true sensor reading
         if np.random.uniform() < om:
             sr = true_sr
@@ -224,11 +226,28 @@ def generate_ground_truth_data(G, **kwargs):
             sr = np.random.choice([sr for sr in readings if sr not in true_sr])
         E[i] = sr
 
-    if 'map_num' not in kwargs and 'ground_truth_num' not in kwargs:
-        return (C0, C, A, E)
+    if 'map_num' in kwargs and 'ground_truth_num' in kwargs:
+        GT = (C0, C, A, E)
+        mn = kwargs['map_num']
+        gtn = kwargs['ground_truth_num']
+        save_ground_truth(GT, mn, gtn)
 
-    mn = kwargs['map_num']
-    gtn = kwargs['ground_truth_num']
+    return (C0, C, A, E)
+
+
+def save_ground_truth(GT, mn, gtn):
+    '''
+    GT: (tuple) such that GT=(C0, C, A, E) where
+        C0 is initial location,
+        C is sequence of actual steps,
+        A is sequence of actions,
+        E is sequence of sensor readings
+    mn: map number
+    gtn: ground truth number for given map
+    '''
+
+    C0, C, A, E = GT
+
     fname = './maps/map{}_groundtruth{}'.format(mn, gtn)
     with open(fname, 'w') as f:
         f.write(str(C0) + '\n')
@@ -240,7 +259,18 @@ def generate_ground_truth_data(G, **kwargs):
             f.write(e + '\n')
 
 
-def filtering(G, GT):
+def load_ground_truth_data(fname):
+    with open(fname, 'r') as f:
+        data = f.readlines()
+    data = map(lambda s: s.strip(), data)
+    C0 = make_tuple(data[0])
+    C = [make_tuple(d) for d in data[1:101]]
+    A = data[101:201]
+    E = data[201:]
+    return (C0, C, A, E)
+
+
+def filtering(G, GT, show_heatmaps=False):
     '''
     G: 2d-array representing map/graph
     GT: (tuple) such that GT=(C0, C, A, E) where
@@ -264,10 +294,10 @@ def filtering(G, GT):
             rp, cp = (r, c-1)
         else:
             rp, cp = (r, c+1)
-        
+
         if is_occupiable(G, rp, cp):
             possible_states.append((rp, cp))
-        
+
         return possible_states
 
     rows, cols = G.shape
@@ -277,8 +307,17 @@ def filtering(G, GT):
     if C0 and C:
         path_provided = True
         # convert coordinates from xy to rc
-        C0 = [to_rc(C0[0], C0[1])]
-        C = [to_rc(c[0], c[1]) for c in C]
+        # C0 = [to_rc(C0[0], C0[1])]
+        # C = [to_rc(c[0], c[1]) for c in C]
+        C0 = [C0]
+
+        # create running error list:
+        #   For each tuple:
+        #       1st: Actual Position, C[i]
+        #       2nd: MLE position
+        #       3rd: Manhattan error
+        Err = [tuple() for i in xrange(len(C))]
+        mle = [tuple() for i in xrange(len(C))]
 
     # create heatmap and set initial probabilities
     H = np.zeros(G.shape)
@@ -306,7 +345,7 @@ def filtering(G, GT):
                     priors = np.array((H[r, c], 0.00))
                 else:
                     rn, cn = action_coords(a, r, c)
-                    trans_model = np.array((1.00, 0.90))
+                    trans_model = np.array((1.00, TRANSITION_SUCCESS))
                     priors = np.array((H[r, c], H[possible_prevs[1]]))
 
                 # we need to do additional checks on the current state. Namely,
@@ -314,13 +353,13 @@ def filtering(G, GT):
                 #   applied
                 rn, cn = action_coords(a, r, c)
                 if is_occupiable(G, rn, cn):
-                    trans_model[0] = 0.10
+                    trans_model[0] = 1 - TRANSITION_SUCCESS
 
                 # set observation modle probability
                 if e == sensor_reading(G[r, c]):
-                    obs_model = 0.90  # correct reading
+                    obs_model = OBSERVATION_TRUE  # correct reading
                 else:
-                    obs_model = 0.05  # either one of the two other states
+                    obs_model = (1 - OBSERVATION_TRUE)/2.00
 
                 H_next[r, c] = obs_model*trans_model.dot(priors)
 
@@ -328,25 +367,17 @@ def filtering(G, GT):
         H_next = alpha*H_next
         H = np.copy(H_next)
 
-        '''
-        if i in (np.array([10, 50, 100])-1):
-            if path_provided:
-                show_heatmap(H, C0 + C[:i])
-            else:
-                show_heatmap(H)
-        '''
+        mle[i] = np.unravel_index(H.argmax(), H.shape)
+        Err[i] = (C[i], mle, np.absolute(np.array(C[i])-np.array(mle[i])).sum())
 
-    return (np.unravel_index(H.argmax(), H.shape), H.max())
+        if show_heatmaps:
+            if i in (np.array([10, 50, 100])-1):
+                if path_provided:
+                    display_heatmap(H, C0 + C[:i])
+                else:
+                    display_heatmap(H)
 
-def load_ground_truth_data(fname):
-    with open(fname, 'r') as f:
-        data = f.readlines()
-    data = map(lambda s: s.strip(), data)
-    C0 = make_tuple(data[0])
-    C = [make_tuple(d) for d in data[1:101]]
-    A = data[101:201]
-    E = data[201:]
-    return (C0, C, A, E)
+    return (Err, H.max())
 
 
 def sensor_reading(x):
@@ -404,7 +435,7 @@ def load_map_from_file(fname):
     return np.loadtxt(fname, delimiter=',', dtype=int)
 
 
-def show_map(G, S=None, *args):
+def display_map(G, S=None, *args):
     '''
     G: 2d-array representing map/graph
     S: ground truth sequence of moves
@@ -419,15 +450,15 @@ def show_map(G, S=None, *args):
     plt.gca().invert_yaxis()
     plt.gca().xaxis.set_ticks_position('top')
     if S:
-        x = np.array([s[0] for s in S]) + 0.50
-        y = np.array([s[1] for s in S]) + 0.50
-        plt.plot(x, y)
-        plt.plot(x[0], y[0], marker='o')
-        plt.plot(x[-1], y[-1], marker='H')
+        r = np.array([s[0] for s in S]) + 0.50
+        c = np.array([s[1] for s in S]) + 0.50
+        plt.plot(c, r)
+        plt.plot(c[0], r[0], marker='o')
+        plt.plot(c[-1], r[-1], marker='H')
     plt.show()
 
 
-def show_heatmap(H, S=None, *args):
+def display_heatmap(H, S=None, *args):
     '''
     H: 2d-array representing probability heatmap
     S: ground truth sequence of moves
@@ -442,9 +473,18 @@ def show_heatmap(H, S=None, *args):
     plt.gca().invert_yaxis()
     plt.gca().xaxis.set_ticks_position('top')
     if S:
-        x = np.array([s[0] for s in S]) + 0.50
-        y = np.array([s[1] for s in S]) + 0.50
-        plt.plot(x, y)
-        plt.plot(x[0], y[0], marker='o')
-        plt.plot(x[-1], y[-1], marker='H')
+        r = np.array([s[0] for s in S]) + 0.50
+        c = np.array([s[1] for s in S]) + 0.50
+        plt.plot(c, r)
+        plt.plot(c[0], r[0], marker='o')
+        plt.plot(c[-1], r[-1], marker='H')
+    plt.grid()
+    plt.show()
+
+
+def plot_error(Err):
+
+    fig, ax = plt.subplots(1)
+    t = range(1, 101)
+    ax.plot(t, Err, 'r--*')
     plt.show()

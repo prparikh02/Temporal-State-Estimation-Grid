@@ -14,10 +14,14 @@ Make maps and ground truth files
 #     fname = './maps/map{}'.format(i)
 #     G = gw.generate_map(rows, cols, in_file=fname, save_file=True)
 #     for j in xrange(10):
-#         gw.generate_ground_truth_data(G, map_num=i, ground_truth_num=j)
+#         print (i, j)
+#         C0, C, A, E = gw.generate_ground_truth_data(G)
+#         GT = (C0, C, A, E)
+#         gw.save_ground_truth(GT, i, j)
 
 
-for i in xrange(10):
+N = 0
+for i in xrange(N):
 
     '''
     Random
@@ -31,13 +35,17 @@ for i in xrange(10):
     '''
     Loading from file
     '''
-    mn = 3
-    gtn = i
+    mn = 2
+    gtn = i+5
     map_file = './maps/map{}'.format(mn)
     gt_file = './maps/map{}_groundtruth{}'.format(mn, gtn)
     G = gw.load_map_from_file(map_file)
     GT = gw.load_ground_truth_data(gt_file)
-    ML = gw.filtering(G, GT)
+    result, hmax = gw.filtering(G, GT, show_heatmaps=True)
+    err = [e[-1] for e in result]
+    _, C, _, _ = GT
+    gw.plot_error(err)
+    # gw.display_map(G)
 
     '''
     Assignment Example
@@ -49,10 +57,10 @@ for i in xrange(10):
     # ML = gw.filtering(G, GT)
 
 
-    # gw.show_map(G)
+    # gw.display_map(G)
 
-    C0, C, A, E = GT
-    print('initial: {}'.format(C0))
-    print('final: {}'.format(C[-1]))
-    print('Filtering estimate: {}'.format(ML))
-    print('Manhattan Error: {}'.format(abs(ML[0][0]-C[-1][0]) + abs(ML[0][1]-C[-1][1])))
+    # C0, C, A, E = GT
+    # print('initial: {}'.format(C0))
+    # print('final: {}'.format(C[-1]))
+    # print('Filtering estimate: {}'.format(ML))
+    # print('Manhattan Error: {}'.format(abs(ML[0][0]-C[-1][0]) + abs(ML[0][1]-C[-1][1])))
