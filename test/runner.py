@@ -20,7 +20,7 @@ Make maps and ground truth files
 #         gw.save_ground_truth(GT, i, j)
 
 
-N = 0
+N = 1
 for i in xrange(N):
 
     '''
@@ -35,29 +35,28 @@ for i in xrange(N):
     '''
     Loading from file
     '''
-    mn = 2
-    gtn = i+5
+    mn = 3
+    gtn = 2
     map_file = './maps/map{}'.format(mn)
     gt_file = './maps/map{}_groundtruth{}'.format(mn, gtn)
     G = gw.load_map_from_file(map_file)
     GT = gw.load_ground_truth_data(gt_file)
-    result, hmax = gw.filtering(G, GT, show_heatmaps=True)
-    err = [e[-1] for e in result]
-    _, C, _, _ = GT
-    gw.plot_error(err)
-    # gw.display_map(G)
+    results = gw.filtering(G, GT, show_heatmaps=True, show_error=True)
+    gw.display_map(G)
+    MLS, Err = gw.viterbi(G, GT, show_trajectories=True, show_error=True)
+    
 
     '''
-    Assignment Example
-    '''
+    # Assignment Example
+    # '''
     # G = np.array([[2, 2, 1], [0, 0, 0], [0, 3, 2]])
     # A = ['R', 'R', 'D', 'D']
     # E = ['N', 'N', 'H', 'H']
     # GT = (None, None, A, E)
-    # ML = gw.filtering(G, GT)
-
-
-    # gw.display_map(G)
+    # gw.filtering(G, GT)
+    # MLS, Err = gw.viterbi(G, GT, N=8)
+    # print(MLS)
+    # print(Err)
 
     # C0, C, A, E = GT
     # print('initial: {}'.format(C0))

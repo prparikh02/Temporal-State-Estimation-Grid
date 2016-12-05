@@ -270,7 +270,7 @@ def load_ground_truth_data(fname):
     return (C0, C, A, E)
 
 
-def filtering(G, GT, show_heatmaps=False):
+def filtering(G, GT, show_heatmaps=False, show_error=True):
     '''
     G: 2d-array representing map/graph
     GT: (tuple) such that GT=(C0, C, A, E) where
@@ -280,43 +280,21 @@ def filtering(G, GT, show_heatmaps=False):
         E is sequence of sensor readings
     '''
 
-    def get_possible_previous_states(r, c, a):
-        '''
-        given current state (r, c) and action a, return set of
-        possible previous states that could have led to current state
-        '''
-        possible_states = [(r, c)]
-        if a == 'U':
-            rp, cp = (r+1, c)
-        elif a == 'D':
-            rp, cp = (r-1, c)
-        elif a == 'R':
-            rp, cp = (r, c-1)
-        else:
-            rp, cp = (r, c+1)
-
-        if is_occupiable(G, rp, cp):
-            possible_states.append((rp, cp))
-
-        return possible_states
-
     rows, cols = G.shape
     C0, C, A, E = GT
 
     path_provided = False
     if C0 and C:
         path_provided = True
-        # convert coordinates from xy to rc
-        # C0 = [to_rc(C0[0], C0[1])]
-        # C = [to_rc(c[0], c[1]) for c in C]
         C0 = [C0]
 
-        # create running error list:
+        # Colelction of results:
         #   For each tuple:
         #       1st: Actual Position, C[i]
         #       2nd: MLE position
         #       3rd: Manhattan error
-        Err = [tuple() for i in xrange(len(C))]
+        #       4th: P(actual_position)[i]
+        results = [tuple() for i in xrange(len(C))]
         mle = [tuple() for i in xrange(len(C))]
 
     # create heatmap and set initial probabilities
@@ -329,22 +307,21 @@ def filtering(G, GT, show_heatmaps=False):
         e = E[i]
         for r in xrange(rows):
             for c in xrange(cols):
+
                 if G[r, c] == BLOCKED:
                     H_next[r, c] == 0
                     continue
+
                 # get possible previous states
-                possible_prevs = get_possible_previous_states(r, c, a)
+                possible_prevs = get_possible_previous_states(G, r, c, a)
 
                 # set transition model and prior belief probabilities
                 if len(possible_prevs) == 1:
                     # if only one possible previous state, namely the current
                     #   state, then the transition model reduces to prior prob
-                    rn, cn = action_coords(a, r, c)
-
                     trans_model = np.array((1.00, 0.00))
                     priors = np.array((H[r, c], 0.00))
                 else:
-                    rn, cn = action_coords(a, r, c)
                     trans_model = np.array((1.00, TRANSITION_SUCCESS))
                     priors = np.array((H[r, c], H[possible_prevs[1]]))
 
@@ -367,8 +344,10 @@ def filtering(G, GT, show_heatmaps=False):
         H_next = alpha*H_next
         H = np.copy(H_next)
 
-        mle[i] = np.unravel_index(H.argmax(), H.shape)
-        Err[i] = (C[i], mle, np.absolute(np.array(C[i])-np.array(mle[i])).sum())
+        if path_provided:
+            mle[i] = np.unravel_index(H.argmax(), H.shape)
+            manhattan_dist = np.absolute(np.array(C[i])-np.array(mle[i])).sum()
+            results[i] = (C[i], mle[i], manhattan_dist, H[C[i]])
 
         if show_heatmaps:
             if i in (np.array([10, 50, 100])-1):
@@ -377,7 +356,159 @@ def filtering(G, GT, show_heatmaps=False):
                 else:
                     display_heatmap(H)
 
-    return (Err, H.max())
+    if path_provided:
+        if show_error:
+            Err = [r[2] for r in results]
+            p = [r[-1] for r in results]
+            plot_error(Err)
+            plot_error(p)
+
+        return results
+
+
+def viterbi(G, GT, N=10, show_trajectories=False, show_error=True):
+    '''
+    G: 2d-array representing map/graph
+    GT: (tuple) such that GT=(C0, C, A, E) where
+        C0 is initial location,
+        C is sequence of actual steps,
+        A is sequence of actions,
+        E is sequence of sensor readings
+    N: number of trajectories to track
+    show_trajectories: displays top 10 MLS trajectories
+    show_error: displays error of top MLS
+
+    Viterbi algorithm implementation reflects pseudocode given in:
+        Figure 6.11
+        Speech and Language Processing, 2nd Edition
+        by Daniel Jurafsky, James H. Martin
+    '''
+
+    # the observations are the sensor readings, E
+    C0, C, A, E = GT
+    path_provided = False
+    if C0 and C:
+        path_provided = True
+        C0 = [C0]
+
+    T = len(E)
+    # most likely sequences
+    MLS = [[tuple() for t in xrange(T)] for n in xrange(N)]
+    Err = np.zeros((N, T)) if path_provided else None
+
+    # set initial probabilities; priors
+    priors = np.zeros(G.shape)
+    priors[G != BLOCKED] = 1/(G.size - (G == BLOCKED).sum())
+
+    rows, cols = G.shape
+    # Viterbi path probability
+    V = np.zeros((T, rows, cols))
+
+    # backpointers
+    BP = [
+        [[tuple() for r in xrange(rows)] for c in xrange(cols)]
+        for t in xrange(T)
+    ]
+
+    for t in xrange(0, T):
+        if t % 10 == 0:
+            print('t: {}'.format(t))
+        a = A[t]
+        e = E[t]
+        for r in xrange(rows):
+            for c in xrange(cols):
+
+                if G[r, c] == BLOCKED:
+                    V[t, r, c] == 0
+                    continue
+
+                # get possible previous states
+                possible_prevs = get_possible_previous_states(G, r, c, a)
+
+                # set transition model and prior belief probabilities
+                if len(possible_prevs) == 1:
+                    # if only one possible previous state, namely the current
+                    #   state, then the transition model reduces to prior prob
+                    trans_model = np.array((1.00, 0.00))
+                    if t == 0:
+                        v_prev = np.array((priors[r, c], 0.00))
+                    else:
+                        v_prev = np.array((V[t-1, r, c], 0.00))
+                else:
+                    trans_model = np.array((1.00, TRANSITION_SUCCESS))
+                    rp, cp = possible_prevs[1]
+                    if t == 0:
+                        v_prev = np.array((priors[r, c], priors[rp, cp]))
+                    else:
+                        v_prev = np.array((V[t-1, r, c], V[t-1, rp, cp]))
+
+                # we need to do additional checks on the current state. Namely,
+                #   check if the action could have even been successfully
+                #   applied
+                rn, cn = action_coords(a, r, c)
+                if is_occupiable(G, rn, cn):
+                    trans_model[0] = 1.00 - TRANSITION_SUCCESS
+
+                # set observation modle probability
+                if e == sensor_reading(G[r, c]):
+                    obs_model = OBSERVATION_TRUE  # correct reading
+                else:
+                    obs_model = (1.00 - OBSERVATION_TRUE)/2.00
+
+                V[t, r, c] = obs_model*(np.multiply(trans_model, v_prev).max())
+                if t == 0:
+                    continue
+                idx = (np.multiply(trans_model, v_prev)).argmax()
+                BP[t][r][c] = (r, c) if idx == 0 else possible_prevs[1]
+
+        alpha = 1.00/np.sum(V[t, :, :])
+        V[t, :, :] = alpha*V[t, :, :]
+        # print(V[t, :, :])
+        # print BP[t]
+
+    I = V[-1, :, :].ravel().argsort()[-N:][::-1]
+    I = np.unravel_index(I, V[-1, :, :].shape)
+    ml_end_points = [(I[0][i], I[1][i]) for i in xrange(len(I[0]))]
+    for n in xrange(N):
+        MLS[n][-1] = ml_end_points[n]
+        for t in xrange(T-1, 0, -1):
+            r, c = MLS[n][t]
+            MLS[n][t-1] = BP[t][r][c]
+            if path_provided:
+                man_dist = \
+                    np.absolute(np.array(C[t])-np.array(MLS[n][t])).sum()
+                Err[n, t] = man_dist
+
+    if show_trajectories and path_provided:
+        for i in (np.array([10, 50, 100])-1):
+            GT = (C0, C[:i], None, None)
+            display_trajectories(G, GT, [MLS[n][:i] for n in xrange(N)])
+
+    if show_error and path_provided:
+        plot_error(Err[0])
+
+    return (MLS, Err)
+
+
+def get_possible_previous_states(G, r, c, a):
+        '''
+        given current state (r, c) and action a, return set of
+        possible previous states that could have led to current state
+        '''
+        possible_states = [(r, c)]
+        if a == 'U':
+            rp, cp = (r+1, c)
+        elif a == 'D':
+            rp, cp = (r-1, c)
+        elif a == 'R':
+            rp, cp = (r, c-1)
+        else:
+            rp, cp = (r, c+1)
+
+        if is_occupiable(G, rp, cp):
+            possible_states.append((rp, cp))
+
+        return possible_states
 
 
 def sensor_reading(x):
@@ -484,7 +615,62 @@ def display_heatmap(H, S=None, *args):
 
 def plot_error(Err):
 
-    fig, ax = plt.subplots(1)
-    t = range(1, 101)
-    ax.plot(t, Err, 'r--*')
+    plt.figure()
+    t = range(1, len(Err)+1)
+    plt.plot(t, Err, 'r-*')
+    plt.show()
+
+
+def display_trajectories(G, GT, MLS):
+    '''
+    G: 2d-array representing map/graph
+    GT: (tuple) such that GT=(C0, C, A, E) where
+        C0 is initial location,
+        C is sequence of actual steps,
+        A is sequence of actions,
+        E is sequence of sensor readings
+    MLS: Top N=len(MLS) most likely trajectories given by the Viterbi algorithm
+    '''
+
+    C0, C, _, _ = GT
+    if type(C0) == tuple:
+        C0 = [C0]
+    C = C0 + C
+    r, c = zip(*C)
+    r = np.array(r)
+    c = np.array(c)
+
+    plt.subplot(121)
+    plt.plot(c, r, 'b', linewidth=1.0, label='True Path')
+    rt, ct = zip(*MLS[0])
+    rt = np.array(rt)
+    ct = np.array(ct)
+    plt.plot(ct, rt, 'r--', label='Most Likely Sequence')
+    plt.plot(c[0], r[0], marker='o', ms=10, label='Start')
+    plt.plot(c[-1], r[-1], marker='H', ms=10, label='End')
+    x1, x2, y1, y2 = plt.axis()
+    plt.xlim((x1-1, x2+1))
+    plt.ylim((y1-1, y2+1))
+    plt.gca().invert_yaxis()
+    plt.gca().xaxis.set_ticks_position('top')
+    plt.legend(loc='best')
+    plt.title('True Path vs Most Likely Sequence', y=1.06, fontsize=12)
+
+    plt.subplot(122)
+    for i in xrange(1, len(MLS)):
+        rt, ct = zip(*MLS[i])
+        rt = np.array(rt)
+        ct = np.array(ct)
+        plt.plot(ct, rt)
+    plt.plot(c, r, 'b', linewidth=1.5, label='True Path')
+    plt.plot(c[0], r[0], marker='o', ms=10, label='Start')
+    plt.plot(c[-1], r[-1], marker='H', ms=10, label='End')
+    x1, x2, y1, y2 = plt.axis()
+    plt.xlim((x1-1, x2+1))
+    plt.ylim((y1-1, y2+1))
+    plt.gca().invert_yaxis()
+    plt.gca().xaxis.set_ticks_position('top')
+    plt.legend(loc='best')
+    plt.title('True Path vs Next 9 Most Likely Sequences', y=1.06, fontsize=12)
+
     plt.show()
