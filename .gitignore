@@ -1,6 +1,8 @@
 # Custom
 maps/
 maps_bak/
+report/
+*.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

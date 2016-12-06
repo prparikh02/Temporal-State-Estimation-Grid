@@ -352,7 +352,7 @@ def filtering(G, GT, show_heatmaps=False, show_error=True):
         if show_heatmaps:
             if i in (np.array([10, 50, 100])-1):
                 if path_provided:
-                    display_heatmap(H, C0 + C[:i])
+                    display_heatmap(H, C0 + C[:i+1])
                 else:
                     display_heatmap(H)
 
@@ -361,7 +361,7 @@ def filtering(G, GT, show_heatmaps=False, show_error=True):
             Err = [r[2] for r in results]
             p = [r[-1] for r in results]
             plot_error(Err)
-            plot_error(p)
+            plot_ground_truth_probability(p)
 
         return results
 
@@ -411,8 +411,8 @@ def viterbi(G, GT, N=10, show_trajectories=False, show_error=True):
     ]
 
     for t in xrange(0, T):
-        if t % 10 == 0:
-            print('t: {}'.format(t))
+        # if t % 20 == 0:
+        #     print('t: {}'.format(t))
         a = A[t]
         e = E[t]
         for r in xrange(rows):
@@ -464,7 +464,6 @@ def viterbi(G, GT, N=10, show_trajectories=False, show_error=True):
         alpha = 1.00/np.sum(V[t, :, :])
         V[t, :, :] = alpha*V[t, :, :]
         # print(V[t, :, :])
-        # print BP[t]
 
     I = V[-1, :, :].ravel().argsort()[-N:][::-1]
     I = np.unravel_index(I, V[-1, :, :].shape)
@@ -566,7 +565,7 @@ def load_map_from_file(fname):
     return np.loadtxt(fname, delimiter=',', dtype=int)
 
 
-def display_map(G, S=None, *args):
+def display_map(G, S=None, is_superimposed=False, *args):
     '''
     G: 2d-array representing map/graph
     S: ground truth sequence of moves
@@ -577,16 +576,17 @@ def display_map(G, S=None, *args):
     cmap = 'YlOrRd'
     R, C = np.meshgrid(np.arange(rows+1), np.arange(cols+1))
     plt.pcolormesh(R, C, G, cmap=cmap)
-    # plt.colorbar()
-    plt.gca().invert_yaxis()
-    plt.gca().xaxis.set_ticks_position('top')
     if S:
         r = np.array([s[0] for s in S]) + 0.50
         c = np.array([s[1] for s in S]) + 0.50
         plt.plot(c, r)
         plt.plot(c[0], r[0], marker='o')
         plt.plot(c[-1], r[-1], marker='H')
-    plt.show()
+    plt.title('Map', y=1.06, fontsize=12)
+    if not is_superimposed:
+        plt.gca().invert_yaxis()
+        plt.gca().xaxis.set_ticks_position('top')
+        plt.show()
 
 
 def display_heatmap(H, S=None, *args):
@@ -599,6 +599,7 @@ def display_heatmap(H, S=None, *args):
     rows, cols = H.shape
     cmap = 'Reds'
     R, C = np.meshgrid(np.arange(rows+1), np.arange(cols+1))
+    plt.figure()
     plt.pcolormesh(R, C, H, cmap=cmap)
     plt.colorbar()
     plt.gca().invert_yaxis()
@@ -610,6 +611,7 @@ def display_heatmap(H, S=None, *args):
         plt.plot(c[0], r[0], marker='o')
         plt.plot(c[-1], r[-1], marker='H')
     plt.grid()
+    plt.title('Probability Heatmap', y=1.06, fontsize=12)
     plt.show()
 
 
@@ -618,6 +620,9 @@ def plot_error(Err):
     plt.figure()
     t = range(1, len(Err)+1)
     plt.plot(t, Err, 'r-*')
+    plt.xlabel('Step')
+    plt.ylabel('Manhattan Distance Error')
+    plt.title('Maximum Likelihood Location Error vs Time Steps', fontsize=12)
     plt.show()
 
 
@@ -637,17 +642,19 @@ def display_trajectories(G, GT, MLS):
         C0 = [C0]
     C = C0 + C
     r, c = zip(*C)
-    r = np.array(r)
-    c = np.array(c)
+    r = np.array(r) + 0.50
+    c = np.array(c) + 0.50
 
+    plt.figure()
     plt.subplot(121)
+    display_map(G, is_superimposed=True)
     plt.plot(c, r, 'b', linewidth=1.0, label='True Path')
     rt, ct = zip(*MLS[0])
-    rt = np.array(rt)
-    ct = np.array(ct)
+    rt = np.array(rt) + 0.50
+    ct = np.array(ct) + 0.50
     plt.plot(ct, rt, 'r--', label='Most Likely Sequence')
-    plt.plot(c[0], r[0], marker='o', ms=10, label='Start')
-    plt.plot(c[-1], r[-1], marker='H', ms=10, label='End')
+    plt.plot(c[0], r[0], marker='o', markerfacecolor='g', ms=10, label='Start')
+    plt.plot(c[-1], r[-1], marker='H', markerfacecolor='r', ms=10, label='End')
     x1, x2, y1, y2 = plt.axis()
     plt.xlim((x1-1, x2+1))
     plt.ylim((y1-1, y2+1))
@@ -657,14 +664,15 @@ def display_trajectories(G, GT, MLS):
     plt.title('True Path vs Most Likely Sequence', y=1.06, fontsize=12)
 
     plt.subplot(122)
+    display_map(G, is_superimposed=True)
     for i in xrange(1, len(MLS)):
         rt, ct = zip(*MLS[i])
-        rt = np.array(rt)
-        ct = np.array(ct)
+        rt = np.array(rt) + 0.50
+        ct = np.array(ct) + 0.50
         plt.plot(ct, rt)
     plt.plot(c, r, 'b', linewidth=1.5, label='True Path')
-    plt.plot(c[0], r[0], marker='o', ms=10, label='Start')
-    plt.plot(c[-1], r[-1], marker='H', ms=10, label='End')
+    plt.plot(c[0], r[0], marker='o', markerfacecolor='g', ms=10, label='Start')
+    plt.plot(c[-1], r[-1], marker='H', markerfacecolor='r', ms=10, label='End')
     x1, x2, y1, y2 = plt.axis()
     plt.xlim((x1-1, x2+1))
     plt.ylim((y1-1, y2+1))
@@ -674,3 +682,32 @@ def display_trajectories(G, GT, MLS):
     plt.title('True Path vs Next 9 Most Likely Sequences', y=1.06, fontsize=12)
 
     plt.show()
+
+
+def plot_ground_truth_probability(p):
+
+    plt.figure()
+    t = range(1, len(p)+1)
+    plt.plot(t, p, 'r-*')
+    plt.xlabel('Step')
+    plt.ylabel('Probability')
+    plt.title('Probability of Actual Ground Truth Location', fontsize=12)
+    plt.show()
+
+
+def print_ground_truth(GT):
+    '''
+    GT: (tuple) such that GT=(C0, C, A, E) where
+        C0 is initial location,
+        C is sequence of actual steps,
+        A is sequence of actions,
+        E is sequence of sensor readings
+    '''
+
+    C0, C, A, E = GT
+
+    print('inital state: {}\n'.format(C0))
+    row_fmt = '{:>2}:    {:^6} {:^6} {:^8}'
+    print('{:>2}   {:^6} {:^5} {:^8}'.format('step', 'action', 'sense', 'loc'))
+    for i in xrange(len(C)):
+        print row_fmt.format(i, A[i], E[i], C[i])
